@@ -20,56 +20,87 @@ class BashExecutionPlan(BaseModel):
     summary: str = Field(description="Overview of what this plan accomplishes")
     steps: List[BashStep]
 
-# 3. Main Agent Execution Function
+# 3. Main Agent Execution Function with Dynamic Self-Healing
 def run_agent_prompt(prompt: str):
     print(f"\n--- Processing User Request: '{prompt}' ---")
     
-    # Generate structured content with Pydantic enforcement
-    response = client.models.generate_content(
+    # Create a persistent chat session with schema enforcement
+    chat = client.chats.create(
         model="gemini-3.6-flash",
-        contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=BashExecutionPlan,
-            temperature=0.1,  # Low temperature for deterministic output
-        ),
+            temperature=0.1,
+            system_instruction="You are an automated bash script generator. Always issue commands compatible with the current working environment."
+        )
     )
 
-    # 4. Access the parsed Pydantic object directly
-    plan: BashExecutionPlan = response.parsed
-    print(f"\n[Plan Summary]: {plan.summary}\n")
-    print(f"\nNumber of steps prepared: {len(plan.steps)}")
+    # Initial request to populate chat context
+    response = chat.send_message(prompt)
 
-    # 5. Execute steps sequentially with safety confirmation
-    for i, step in enumerate(plan.steps, 1):
-        safety_tag = "SAFE" if step.is_safe else "WARNING: POTENTIALLY DESTRUCTIVE"
-        print(f"Step {i} [{safety_tag}]:")
-        print(f"  Rationale: {step.explanation}")
-        print(f"  Command:   {step.command}")
-        
-        confirm = input("Execute step? (y/N): ").strip().lower()
-        if confirm != 'y':
-            print(" Skipping step by user request.\n")
-            continue
+    # Outer control loop: Handles plan replacement on failures
+    while True:
+        plan: BashExecutionPlan = response.parsed
+        print(f"\n[Plan Summary]: {plan.summary}")
+        print(f"Number of steps prepared: {len(plan.steps)}\n")
 
-        # Run command via subprocess
-        try:
-            result = subprocess.run(
-                step.command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+        plan_failed = False
+
+        if not plan.steps:
+            print("\n[Agent]: No steps generated or remaining. Task complete or unachievable.")
+            break
+
+        # Inner execution loop: Iterates step-by-step
+        for i, step in enumerate(plan.steps, 1):
+            safety_tag = "SAFE" if step.is_safe else "WARNING: POTENTIALLY DESTRUCTIVE"
+            print(f"Step {i} [{safety_tag}]:")
+            print(f"  Rationale: {step.explanation}")
+            print(f"  Command:   {step.command}")
             
-            if result.returncode == 0:
-                print(f" Output:\n{result.stdout.strip()}\n")
-            else:
-                print(f" Error (code {result.returncode}):\n{result.stderr.strip()}\n")
+            confirm = input("Execute step? (y/N): ").strip().lower()
+            if confirm != 'y':
+                print(" Skipping step by user request.\n")
+                continue
+
+            # Run command via subprocess
+            try:
+                result = subprocess.run(
+                    step.command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
                 
-        except subprocess.TimeoutExpired:
-            print(" Execution timed out after 30 seconds.\n")
+                if result.returncode == 0:
+                    print(f" Output:\n{result.stdout.strip()}\n")
+                else:
+                    print(f" Error (code {result.returncode}):\n{result.stderr.strip()}\n")
+                    
+                    retry = input("Step failed. Feed error back to Gemini to repair remaining plan? (y/N): ").strip().lower()
+                    if retry == 'y':
+                        error_prompt = (
+                            f"Command '{step.command}' failed with exit code {result.returncode}.\n"
+                            f"Stderr output:\n{result.stderr.strip()}\n"
+                            "Please provide a revised execution plan to complete the original task, replacing the failed step."
+                        )
+                        print("\n--- Requesting Plan Repair from Gemini ---")
+                        # Get a fresh plan via chat history, then break to restart the outer loop
+                        response = chat.send_message(error_prompt)
+                        plan_failed = True
+                        break
+                    else:
+                        print(" Halting plan execution.\n")
+                        return
+
+            except subprocess.TimeoutExpired:
+                print(" Execution timed out after 30 seconds.\n")
+
+        # If all steps in the current plan finished without triggering a failure break, exit function
+        if not plan_failed:
+            print("--- Plan execution complete ---")
+            break
 
 if __name__ == "__main__":
-    test_user_prompt = input("Introduce the desired prompt ")
+    test_user_prompt = input("Introduce the desired prompt: ")
     run_agent_prompt(test_user_prompt)
