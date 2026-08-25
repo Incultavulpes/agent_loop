@@ -17,47 +17,27 @@ Most LLM agents fail in production because they rely on unconstrained text outpu
 
 ## 🏗️ System Architecture
 
-+-------------------------------------------------------------------------------+
-|                             SYSTEM ARCHITECTURE                               |
-+-------------------------------------------------------------------------------+
-
-  [ User Prompt ]
-         |
-         v
-  [ Chat Session Initialization ] <-----------------------------------------+
-  (google-genai SDK + Pydantic Schema)                                      |
-         |                                                                  |
-         v                                                                  |
-  [ Structured Execution Plan ]                                             |
-  (List of BashStep objects: rationale, command, is_safe)                   |
-         |                                                                  |
-         v                                                                  |
-  [ Step Confirmation Gate ]                                                |
-  (Human inspects rationale & risk level -> [y/N])                          |
-         |                                                                  |
-    +----+----+                                                             |
-    |         |                                                             |
-   [y]       [N] ---> (Skip Step / Continue to Next)                        |
-    |                                                                       |
-    v                                                                       |
-  [ Subprocess Execution ] (timeout=30s)                                    |
-    |                                                                       |
-    +-----------------------+                                               |
-    |                       |                                               |
-[returncode == 0]       [returncode != 0]                                   |
-    |                       |                                               |
-    v                       v                                               |
-(Output Streamed)     [ Error Interception ]                                |
-    |                 (Prompt user: Feed stderr back? [y/N])                |
-    |                       |                                               |
-    |                      [y] ---------------------------------------------+
-    |                       |  (Sends stderr + CWD to chat session)
-    |                      [N]
-    v                       |
-[ Next Step in Plan ]       v
-    |                 (Halt Execution)
-    v
-[ Task Completed ]
+```mermaid
+flowchart TD
+    A[User Prompt] --> B[Chat Session Initialization<br/><i>google-genai SDK + Pydantic Schema</i>]
+    B --> C[Structured Execution Plan<br/><i>List of BashStep objects</i>]
+    C --> D{Step Confirmation Gate<br/><i>Human inspects rationale & risk level</i>}
+    
+    D -- "y (Approve)" --> E[Subprocess Execution<br/><i>timeout=30s</i>]
+    D -- "N (Skip)" --> F[Skip Step / Continue to Next]
+    
+    E --> G{Execution Result}
+    G -- "returncode == 0" --> H[Output Streamed]
+    H --> I[Next Step in Plan]
+    
+    G -- "returncode != 0" --> J{Error Interception<br/><i>Prompt: Feed stderr back?</i>}
+    J -- "y (Retry)" --> K[Send stderr + CWD to Chat Session]
+    K --> B
+    J -- "N (Halt)" --> L[Halt Execution]
+    
+    F --> I
+    I --> M[Task Completed]
+```
 
 ---
 
@@ -75,19 +55,27 @@ Most LLM agents fail in production because they rely on unconstrained text outpu
 ## 🚀 Quick Start
 
 1. **Clone Repository & Setup Environment:**
-   git clone https://github.com/your-username/agent_loop.git
+   ```bash
+   git clone [https://github.com/your-username/agent_loop.git](https://github.com/your-username/agent_loop.git)
    cd agent_loop
    python3 -m venv venv
    source venv/bin/activate
+   ```
 
 2. **Install Dependencies:**
+   ```bash
    pip install -r requirements.txt
+   ```
 
 3. **Configure API Key:**
+   ```bash
    echo "GEMINI_API_KEY=your_gemini_api_key_here" > .env
+   ```
 
 4. **Run the Script:**
+   ```bash
    python3 agent_loop.py
+   ```
 
 ---
 
